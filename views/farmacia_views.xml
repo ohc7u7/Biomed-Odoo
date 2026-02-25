@@ -1,0 +1,115 @@
+<odoo>
+    <record id="view_farmacia_gestion_list" model="ir.ui.view">
+        <field name="name">farmacia.gestion.list</field>
+        <field name="model">farmacia.gestion</field>
+        <field name="arch" type="xml">
+            <list string="Trazabilidad Sanitaria BioMed" default_order="stock_actual asc">
+                <field name="alerta_stock" widget="badge" decoration-danger="alerta_stock == 'critico'" decoration-success="alerta_stock == 'normal'" string="URGENCIA"/>
+                <field name="medicamento_id"/>
+                <field name="principio_activo_rel"/>
+                <field name="stock_actual" string="Stock Real" decoration-bf="1"/>
+                <field name="estado" widget="badge" decoration-success="estado == 'procesado'"/>
+                <field name="name" string="Lote"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_farmacia_gestion_form" model="ir.ui.view">
+        <field name="name">farmacia.gestion.form</field>
+        <field name="model">farmacia.gestion</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_validar_medicamento" string="VALIDAR MEDICAMENTO (FDA)" type="object" class="oe_highlight" invisible="estado == 'procesado'"/>
+                    <button name="action_solicitar_stock_compra" string="PEDIR STOCK A COMPRAS" type="object" class="btn-primary" invisible="estado == 'borrador'"/>
+                    
+                    <button name="action_analizar_receta_ia" string="🔍 ANALIZAR RECETA CON IA" type="object" class="btn-warning" invisible="not requires_prescription_rel"/>
+                    
+                    <field name="estado" widget="statusbar" statusbar_visible="borrador,procesado"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name" string="Referencia de Lote"/>
+                        <h1><field name="name"/></h1>
+                    </div>
+                    
+                    <group>
+                        <group string="📦 Inventario y API">
+                            <field name="medicamento_id" options="{'no_create': True}"/>
+                            <field name="stock_actual"/>
+                            <field name="principio_activo_rel" style="font-weight: bold; color: #714B67;"/>
+                            <field name="requires_prescription_rel" widget="boolean_toggle"/>
+                        </group>
+                        <group string="🛒 Adquisición Automática">
+                            <field name="proveedor_id"/>
+                            <field name="cantidad"/>
+                            <field name="purchase_order_id" readonly="1" invisible="not purchase_order_id"/>
+                        </group>
+                    </group>
+
+                    <group string="🤖 Módulo de Inteligencia Artificial (OCR)" invisible="not requires_prescription_rel">
+                        <group>
+                            <field name="receta_rel" widget="image" class="oe_avatar" string="Adjuntar Imagen"/>
+                        </group>
+                        <group>
+                            <field name="ai_analysis_result" nolabel="1" readonly="1"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_product_form_inherit_farmacia" model="ir.ui.view">
+        <field name="name">product.template.form.inherit.farmacia</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_only_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//page[@name='sales']" position="attributes"><attribute name="invisible">1</attribute></xpath>
+            <xpath expr="//page[@name='purchase']" position="attributes"><attribute name="invisible">1</attribute></xpath>
+            <xpath expr="//page[@name='general_information']" position="after">
+                <page string="Datos Médicos (BioMed)" name="medical_data">
+                    <group>
+                        <group string="Seguridad Sanitaria">
+                            <field name="is_medicine"/>
+                            <field name="requires_prescription"/>
+                            <field name="active_component" readonly="1"/>
+                            <field name="fda_status"/>
+                            <field name="prescription_file" widget="binary" string="Receta Digital" invisible="not requires_prescription"/>
+                        </group>
+                        <group string="Gestión de Existencias">
+                            <field name="qty_available" string="Stock Físico Actual"/>
+                            <field name="virtual_available" string="Stock Previsto"/>
+                            <button name="action_abrir_wizard_inventario" 
+                                    string="📥 AGREGAR MEDICAMENTO AL STOCK" 
+                                    type="object" 
+                                    class="btn-primary" 
+                                    icon="fa-plus-square"
+                                    help="Haga clic aquí para subir el stock de este fármaco de forma visual"/>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_order_form_inherit_farmacia" model="ir.ui.view">
+        <field name="name">sale.order.form.inherit.farmacia</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.view_order_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='payment_term_id']" position="after">
+                <field name="prescription_validated" widget="boolean_toggle" string="Receta Validada (BioMed)"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="action_farmacia_main" model="ir.actions.act_window">
+        <field name="name">BioMed Main</field>
+        <field name="res_model">farmacia.gestion</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_farmacia_root" name="BioMed App" web_icon="farmacia_bio,static/description/icon.png" sequence="1"/>
+    <menuitem id="menu_farmacia_gestion" name="Panel de Control" parent="menu_farmacia_root" action="action_farmacia_main" sequence="10"/>
+</odoo>
