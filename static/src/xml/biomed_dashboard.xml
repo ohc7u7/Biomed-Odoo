@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="farmacia_bio.BiomedDashboard" owl="1">
+        <div style="padding:24px;background:#f8f9fa;min-height:100vh;font-family:sans-serif;">
+
+            <!-- Header -->
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+                <div>
+                    <h2 style="margin:0;color:#714B67;font-size:22px;">🏥 BioMed — Dashboard</h2>
+                    <span style="color:#888;font-size:13px;">Métricas en tiempo real</span>
+                </div>
+                <button class="btn btn-sm btn-outline-secondary" t-on-click="loadData">
+                    🔄 Actualizar
+                </button>
+            </div>
+
+            <!-- Loading -->
+            <t t-if="state.loading">
+                <div style="text-align:center;padding:80px;color:#888;">
+                    <div class="spinner-border text-secondary" role="status"/>
+                    <p style="margin-top:16px;">Cargando métricas...</p>
+                </div>
+            </t>
+
+            <!-- Contenido -->
+            <t t-else="">
+
+                <!-- Fila 1: KPIs operativos -->
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;">
+
+                    <div style="background:#fff;border-radius:10px;padding:20px;
+                                box-shadow:0 1px 4px rgba(0,0,0,.08);
+                                border-top:4px solid #714B67;cursor:pointer;"
+                         t-on-click="goToGestion">
+                        <div style="font-size:36px;font-weight:700;color:#714B67;">
+                            <t t-esc="state.data.total_medicamentos"/>
+                        </div>
+                        <div style="font-size:13px;color:#666;margin-top:4px;">💊 Total Medicamentos</div>
+                    </div>
+
+                    <div style="background:#fff;border-radius:10px;padding:20px;
+                                box-shadow:0 1px 4px rgba(0,0,0,.08);
+                                border-top:4px solid #dc3545;cursor:pointer;"
+                         t-on-click="goToCriticos">
+                        <div style="font-size:36px;font-weight:700;color:#dc3545;">
+                            <t t-esc="state.data.stock_critico"/>
+                        </div>
+                        <div style="font-size:13px;color:#666;margin-top:4px;">⚠️ Stock Crítico</div>
+                    </div>
+
+                    <div style="background:#fff;border-radius:10px;padding:20px;
+                                box-shadow:0 1px 4px rgba(0,0,0,.08);
+                                border-top:4px solid #198754;">
+                        <div style="font-size:36px;font-weight:700;color:#198754;">
+                            <t t-esc="state.data.procesados"/>
+                        </div>
+                        <div style="font-size:13px;color:#666;margin-top:4px;">✅ Aprobados FDA</div>
+                    </div>
+
+                    <div style="background:#fff;border-radius:10px;padding:20px;
+                                box-shadow:0 1px 4px rgba(0,0,0,.08);
+                                border-top:4px solid #fd7e14;">
+                        <div style="font-size:36px;font-weight:700;color:#fd7e14;">
+                            <t t-esc="state.data.sin_stock"/>
+                        </div>
+                        <div style="font-size:13px;color:#666;margin-top:4px;">📦 Sin Stock</div>
+                    </div>
+
+                </div>
+
+                <!-- Fila 2: KPIs de IA -->
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
+
+                    <div style="background:linear-gradient(135deg,#667eea,#764ba2);
+                                border-radius:10px;padding:20px;color:#fff;cursor:pointer;"
+                         t-on-click="goToHistorial">
+                        <div style="font-size:32px;font-weight:700;">
+                            <t t-esc="state.data.total_analisis"/>
+                        </div>
+                        <div style="font-size:13px;opacity:.9;margin-top:4px;">🤖 Análisis IA Totales</div>
+                    </div>
+
+                    <div style="background:linear-gradient(135deg,#f093fb,#f5576c);
+                                border-radius:10px;padding:20px;color:#fff;">
+                        <div style="font-size:32px;font-weight:700;">
+                            <t t-esc="state.data.analisis_con_riesgo"/>
+                        </div>
+                        <div style="font-size:13px;opacity:.9;margin-top:4px;">⚠️ Con Contraindicaciones</div>
+                    </div>
+
+                    <div style="background:linear-gradient(135deg,#28a745,#20c997);
+                                border-radius:10px;padding:20px;color:#fff;">
+                        <div style="font-size:32px;font-weight:700;">
+                            <t t-esc="state.data.recetas_aprobadas"/>
+                        </div>
+                        <div style="font-size:13px;opacity:.9;margin-top:4px;">✅ Recetas Aprobadas</div>
+                    </div>
+
+                    <div style="background:linear-gradient(135deg,#dc3545,#fd7e14);
+                                border-radius:10px;padding:20px;color:#fff;">
+                        <div style="font-size:32px;font-weight:700;">
+                            <t t-esc="state.data.recetas_rechazadas"/>
+                        </div>
+                        <div style="font-size:13px;opacity:.9;margin-top:4px;">🚫 Recetas Rechazadas</div>
+                    </div>
+
+                </div>
+
+                <!-- Tabla Top Medicamentos -->
+                <div style="background:#fff;border-radius:10px;padding:24px;
+                            box-shadow:0 1px 4px rgba(0,0,0,.08);">
+                    <h5 style="margin:0 0 16px;color:#333;">
+                        🏆 Top Medicamentos más Analizados
+                    </h5>
+
+                    <t t-if="state.data.top_meds.length === 0">
+                        <div style="text-align:center;padding:30px;color:#aaa;">
+                            <p>Aún no hay análisis IA registrados.</p>
+                            <button class="btn btn-warning btn-sm" t-on-click="goToGestion">
+                                Ir a Gestión Farmacéutica →
+                            </button>
+                        </div>
+                    </t>
+
+                    <t t-else="">
+                        <table class="table table-hover" style="margin:0;">
+                            <thead>
+                                <tr style="background:#f8f9fa;">
+                                    <th>#</th>
+                                    <th>Medicamento</th>
+                                    <th>Estado FDA</th>
+                                    <th>Análisis IA</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <t t-foreach="state.data.top_meds" t-as="med" t-key="med_index">
+                                    <tr>
+                                        <td style="color:#aaa;vertical-align:middle;">
+                                            <t t-esc="med_index + 1"/>
+                                        </td>
+                                        <td style="font-weight:600;vertical-align:middle;">
+                                            <t t-esc="med.nombre"/>
+                                        </td>
+                                        <td style="vertical-align:middle;">
+                                            <span t-att-class="med.estado === 'procesado' ? 'badge bg-success' : 'badge bg-warning text-dark'">
+                                                <t t-esc="med.estado === 'procesado' ? '✅ Liberado' : '🔍 En Revisión'"/>
+                                            </span>
+                                        </td>
+                                        <td style="vertical-align:middle;">
+                                            <span class="badge bg-primary">
+                                                <t t-esc="med.cantidad"/> análisis
+                                            </span>
+                                        </td>
+                                    </tr>
+                                </t>
+                            </tbody>
+                        </table>
+                    </t>
+                </div>
+
+            </t>
+        </div>
+    </t>
+
+</templates>

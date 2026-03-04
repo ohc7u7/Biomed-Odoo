@@ -1,2 +1,6 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_farmacia_gestion,farmacia.gestion,model_farmacia_gestion,base.group_user,1,1,1,1
+access_farmacia_gestion_user,farmacia.gestion user,model_farmacia_gestion,base.group_user,1,1,1,0
+access_farmacia_gestion_manager,farmacia.gestion manager,model_farmacia_gestion,base.group_system,1,1,1,1
+access_biomed_config_wizard,biomed.config.wizard user,model_biomed_config_wizard,base.group_system,1,1,1,1
+access_farmacia_analisis_historial_user,farmacia.analisis.historial user,model_farmacia_analisis_historial,base.group_user,1,1,1,0
+access_farmacia_analisis_historial_manager,farmacia.analisis.historial manager,model_farmacia_analisis_historial,base.group_system,1,1,1,1

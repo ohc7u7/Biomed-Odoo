@@ -1,91 +1,275 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  BioMed — farmacia_views.xml v2.3
+  [NEW-04] Badge de estado de receta IA en el formulario
+  [NEW-05] Medicamentos en borrador ocultos de website (is_published)
+  [NEW-06] Campo receta_aprobada_ia_rel visible en pestaña IA
+-->
 <odoo>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         FARMACIA.GESTION — Lista
+    ══════════════════════════════════════════════════════════════════════════ -->
     <record id="view_farmacia_gestion_list" model="ir.ui.view">
         <field name="name">farmacia.gestion.list</field>
         <field name="model">farmacia.gestion</field>
         <field name="arch" type="xml">
             <list string="Trazabilidad Sanitaria BioMed" default_order="stock_actual asc">
-                <field name="alerta_stock" widget="badge" decoration-danger="alerta_stock == 'critico'" decoration-success="alerta_stock == 'normal'" string="URGENCIA"/>
+                <field name="alerta_stock" widget="badge"
+                    decoration-danger="alerta_stock == 'critico'"
+                    decoration-success="alerta_stock == 'normal'"
+                    string="URGENCIA"/>
                 <field name="medicamento_id"/>
                 <field name="principio_activo_rel"/>
                 <field name="stock_actual" string="Stock Real" decoration-bf="1"/>
-                <field name="estado" widget="badge" decoration-success="estado == 'procesado'"/>
+                <field name="estado" widget="badge"
+                    decoration-success="estado == 'procesado'"
+                    decoration-warning="estado == 'borrador'"/>
                 <field name="name" string="Lote"/>
+                <field name="requires_prescription_rel" string="Receta" optional="show"/>
+                <field name="receta_aprobada_ia_rel" string="Receta IA ✓" optional="show"
+                    widget="boolean"/>
+                <field name="total_analisis" string="Análisis IA" optional="show"/>
             </list>
         </field>
     </record>
 
+    <!-- ══════════════════════════════════════════════════════════════════════
+         FARMACIA.GESTION — Formulario
+    ══════════════════════════════════════════════════════════════════════════ -->
     <record id="view_farmacia_gestion_form" model="ir.ui.view">
         <field name="name">farmacia.gestion.form</field>
         <field name="model">farmacia.gestion</field>
         <field name="arch" type="xml">
             <form>
                 <header>
-                    <button name="action_validar_medicamento" string="VALIDAR MEDICAMENTO (FDA)" type="object" class="oe_highlight" invisible="estado == 'procesado'"/>
-                    <button name="action_solicitar_stock_compra" string="PEDIR STOCK A COMPRAS" type="object" class="btn-primary" invisible="estado == 'borrador'"/>
-                    
-                    <button name="action_analizar_receta_ia" string="🔍 ANALIZAR RECETA CON IA" type="object" class="btn-warning" invisible="not requires_prescription_rel"/>
-                    
+                    <button name="action_validar_medicamento"
+                            string="✓ VALIDAR MEDICAMENTO (FDA)"
+                            type="object" class="oe_highlight"
+                            invisible="estado == 'procesado'"/>
+                    <button name="action_solicitar_stock_compra"
+                            string="🛒 PEDIR STOCK A COMPRAS"
+                            type="object" class="btn-primary"
+                            invisible="estado == 'borrador'"/>
+                    <button name="action_analizar_receta_ia"
+                            string="🔍 ANALIZAR RECETA CON IA (RAG)"
+                            type="object" class="btn-warning"
+                            invisible="not requires_prescription_rel"
+                            confirm="¿Ejecutar análisis completo con IA y base de conocimiento RAG?"/>
                     <field name="estado" widget="statusbar" statusbar_visible="borrador,procesado"/>
                 </header>
+
                 <sheet>
                     <div class="oe_title">
                         <label for="name" string="Referencia de Lote"/>
                         <h1><field name="name"/></h1>
                     </div>
-                    
+
+                    <!-- [NEW-04] Banner de estado de receta IA — visible solo si requiere receta -->
+                    <div invisible="not requires_prescription_rel">
+                        <!-- Receta aprobada -->
+                        <div invisible="not receta_aprobada_ia_rel"
+                             style="background:#d4edda;border-left:5px solid #28a745;
+                                    padding:12px 16px;border-radius:6px;margin-bottom:12px;">
+                            <strong style="color:#155724;font-size:14px;">
+                                ✅ RECETA APROBADA POR IA — Este medicamento PUEDE comprarse en Website y POS
+                            </strong>
+                        </div>
+                        <!-- Receta rechazada o sin analizar -->
+                        <div invisible="receta_aprobada_ia_rel"
+                             style="background:#f8d7da;border-left:5px solid #dc3545;
+                                    padding:12px 16px;border-radius:6px;margin-bottom:12px;">
+                            <strong style="color:#721c24;font-size:14px;">
+                                🚫 RECETA NO APROBADA — La compra está BLOQUEADA en Website y POS.
+                                Adjunta una receta válida y ejecuta "ANALIZAR RECETA CON IA".
+                            </strong>
+                        </div>
+                    </div>
+
+                    <notebook>
+
+                        <!-- ── Pestaña 1: Inventario y Gestión ── -->
+                        <page string="📦 Inventario y Gestión" name="inventario">
+                            <group>
+                                <group string="Validación Sanitaria">
+                                    <field name="medicamento_id" options="{'no_create': True}"/>
+                                    <field name="stock_actual"/>
+                                    <field name="alerta_stock" widget="badge"/>
+                                    <field name="principio_activo_rel"
+                                           style="font-weight:bold;color:#714B67;"/>
+                                    <field name="requires_prescription_rel" widget="boolean_toggle"/>
+                                </group>
+                                <group string="Adquisición Automática">
+                                    <field name="proveedor_id"/>
+                                    <field name="cantidad"/>
+                                    <field name="purchase_order_id" readonly="1"
+                                           invisible="not purchase_order_id"/>
+                                </group>
+                            </group>
+                            <group string="📋 Estado del Registro" style="margin-top:15px;">
+                                <group>
+                                    <field name="estado" widget="badge"/>
+                                    <field name="total_analisis" string="Análisis IA realizados"/>
+                                </group>
+                            </group>
+                        </page>
+
+                        <!-- ── Pestaña 2: IA + RAG ── -->
+                        <page string="🤖 Inteligencia Artificial + RAG"
+                              name="ia_rag"
+                              invisible="not requires_prescription_rel">
+
+                            <!-- Estado actual de aprobación de receta -->
+                            <group string="📋 Estado Actual de Receta IA">
+                                <field name="receta_aprobada_ia_rel"
+                                       string="Receta aprobada por IA"
+                                       widget="boolean_toggle"
+                                       readonly="1"/>
+                                <field name="ai_analysis_timestamp"
+                                       string="Último análisis"
+                                       readonly="1"
+                                       invisible="not ai_analysis_timestamp"/>
+                            </group>
+
+                            <!-- Condiciones del paciente para RAG -->
+                            <group string="🧑‍⚕️ Condiciones del Paciente (para RAG)"
+                                   style="background:#e8f4fd;border-left:4px solid #2196f3;
+                                          padding:12px;border-radius:4px;margin-bottom:15px;">
+                                <field name="condiciones_paciente"
+                                       nolabel="1"
+                                       placeholder="Ej: Insuficiencia Hepática, Embarazo, Diabetes Tipo 2, Asma&#10;Separa con comas. El RAG buscará contraindicaciones para estas condiciones."
+                                       widget="text"
+                                       style="min-height:60px;"/>
+                                <div style="font-size:12px;color:#555;margin-top:4px;">
+                                    💡 <em>El sistema RAG buscará en ChromaDB contraindicaciones
+                                    para el medicamento + estas condiciones y las pasará a Gemini.</em>
+                                </div>
+                            </group>
+
+                            <group>
+                                <group string="📄 Receta Digital">
+                                    <label for="receta_rel" string="Adjuntar imagen de receta (JPEG)"/>
+                                    <field name="receta_rel" widget="image" class="oe_avatar" nolabel="1"/>
+                                </group>
+                            </group>
+
+                            <group string="⚠️ Resultado del Análisis IA + Contexto Médico RAG"
+                                   colspan="2"
+                                   style="background:#fff3cd;padding:15px;border-radius:5px;">
+                                <field name="ai_analysis_result"
+                                       nolabel="1" readonly="1" widget="html"/>
+                            </group>
+                        </page>
+
+                        <!-- ── Pestaña 3: Historial IA ── -->
+                        <page string="📜 Historial IA" name="historial_ia">
+                            <field name="analisis_ids" readonly="1">
+                                <list string="Historial de Análisis IA"
+                                      default_order="timestamp desc"
+                                      decoration-success="receta_aprobada == True"
+                                      decoration-danger="receta_aprobada == False">
+                                    <field name="timestamp" string="Fecha"/>
+                                    <field name="condiciones_paciente" string="Condiciones"/>
+                                    <field name="receta_aprobada" string="✅ Aprobada" widget="boolean"/>
+                                    <field name="tuvo_contraindicaciones" string="⚠️ Riesgo" widget="boolean"/>
+                                    <field name="rag_utilizado" string="RAG" widget="boolean"/>
+                                    <field name="resumen_rag" string="Resumen RAG"/>
+                                    <field name="modelo_usado" string="Modelo IA"/>
+                                </list>
+                            </field>
+                        </page>
+
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         FARMACIA.ANALISIS.HISTORIAL — Lista global
+    ══════════════════════════════════════════════════════════════════════════ -->
+    <record id="view_farmacia_analisis_list" model="ir.ui.view">
+        <field name="name">farmacia.analisis.historial.list</field>
+        <field name="model">farmacia.analisis.historial</field>
+        <field name="arch" type="xml">
+            <list string="Historial de Análisis IA"
+                  default_order="timestamp desc"
+                  decoration-success="receta_aprobada == True"
+                  decoration-danger="receta_aprobada == False">
+                <field name="timestamp" string="Fecha y Hora"/>
+                <field name="medicamento_id" string="Medicamento"/>
+                <field name="condiciones_paciente" string="Condiciones del Paciente"/>
+                <field name="receta_aprobada" string="✅ Aprobada" widget="boolean"/>
+                <field name="tuvo_contraindicaciones" string="⚠️ Contraindicaciones" widget="boolean"/>
+                <field name="rag_utilizado" string="RAG Activo" widget="boolean"/>
+                <field name="resumen_rag" string="Resumen RAG"/>
+                <field name="modelo_usado" string="Modelo IA"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_farmacia_analisis_form" model="ir.ui.view">
+        <field name="name">farmacia.analisis.historial.form</field>
+        <field name="model">farmacia.analisis.historial</field>
+        <field name="arch" type="xml">
+            <form string="Análisis IA — Detalle">
+                <sheet>
                     <group>
-                        <group string="📦 Inventario y API">
-                            <field name="medicamento_id" options="{'no_create': True}"/>
-                            <field name="stock_actual"/>
-                            <field name="principio_activo_rel" style="font-weight: bold; color: #714B67;"/>
-                            <field name="requires_prescription_rel" widget="boolean_toggle"/>
+                        <group string="Información del Análisis">
+                            <field name="medicamento_id" readonly="1"/>
+                            <field name="timestamp" readonly="1"/>
+                            <field name="receta_aprobada" readonly="1" widget="boolean_toggle"/>
+                            <field name="modelo_usado" readonly="1"/>
+                            <field name="rag_utilizado" readonly="1" widget="boolean_toggle"/>
+                            <field name="tuvo_contraindicaciones" readonly="1" widget="boolean_toggle"/>
                         </group>
-                        <group string="🛒 Adquisición Automática">
-                            <field name="proveedor_id"/>
-                            <field name="cantidad"/>
-                            <field name="purchase_order_id" readonly="1" invisible="not purchase_order_id"/>
+                        <group string="Contexto RAG">
+                            <field name="condiciones_paciente" readonly="1"/>
+                            <field name="resumen_rag" readonly="1"/>
                         </group>
                     </group>
-
-                    <group string="🤖 Módulo de Inteligencia Artificial (OCR)" invisible="not requires_prescription_rel">
-                        <group>
-                            <field name="receta_rel" widget="image" class="oe_avatar" string="Adjuntar Imagen"/>
-                        </group>
-                        <group>
-                            <field name="ai_analysis_result" nolabel="1" readonly="1"/>
-                        </group>
+                    <group string="Resultado Completo IA">
+                        <field name="resultado_html" nolabel="1" readonly="1" widget="html"/>
                     </group>
                 </sheet>
             </form>
         </field>
     </record>
 
+    <!-- ══════════════════════════════════════════════════════════════════════
+         PRODUCT.TEMPLATE — Pestaña BioMed
+    ══════════════════════════════════════════════════════════════════════════ -->
     <record id="view_product_form_inherit_farmacia" model="ir.ui.view">
         <field name="name">product.template.form.inherit.farmacia</field>
         <field name="model">product.template</field>
         <field name="inherit_id" ref="product.product_template_only_form_view"/>
         <field name="arch" type="xml">
-            <xpath expr="//page[@name='sales']" position="attributes"><attribute name="invisible">1</attribute></xpath>
-            <xpath expr="//page[@name='purchase']" position="attributes"><attribute name="invisible">1</attribute></xpath>
+            <xpath expr="//page[@name='sales']" position="attributes">
+                <attribute name="invisible">1</attribute>
+            </xpath>
+            <xpath expr="//page[@name='purchase']" position="attributes">
+                <attribute name="invisible">1</attribute>
+            </xpath>
             <xpath expr="//page[@name='general_information']" position="after">
-                <page string="Datos Médicos (BioMed)" name="medical_data">
+                <page string="🏥 Datos Médicos (BioMed)" name="medical_data">
                     <group>
-                        <group string="Seguridad Sanitaria">
-                            <field name="is_medicine"/>
-                            <field name="requires_prescription"/>
+                        <group string="🔐 Seguridad Sanitaria">
+                            <field name="is_medicine" widget="boolean_toggle"/>
+                            <field name="requires_prescription" widget="boolean_toggle"/>
                             <field name="active_component" readonly="1"/>
-                            <field name="fda_status"/>
-                            <field name="prescription_file" widget="binary" string="Receta Digital" invisible="not requires_prescription"/>
+                            <field name="fda_status" readonly="1" widget="badge"/>
+                            <!-- [NEW-06] Estado de receta IA -->
+                            <field name="receta_aprobada_ia" readonly="1" widget="boolean_toggle"
+                                   invisible="not requires_prescription"/>
+                            <field name="prescription_file" widget="binary"
+                                   invisible="not requires_prescription"/>
                         </group>
-                        <group string="Gestión de Existencias">
-                            <field name="qty_available" string="Stock Físico Actual"/>
-                            <field name="virtual_available" string="Stock Previsto"/>
-                            <button name="action_abrir_wizard_inventario" 
-                                    string="📥 AGREGAR MEDICAMENTO AL STOCK" 
-                                    type="object" 
-                                    class="btn-primary" 
-                                    icon="fa-plus-square"
-                                    help="Haga clic aquí para subir el stock de este fármaco de forma visual"/>
+                        <group string="📦 Gestión de Existencias">
+                            <field name="qty_available" readonly="1"/>
+                            <field name="virtual_available" readonly="1"/>
+                            <button name="action_abrir_wizard_inventario"
+                                    string="📥 AGREGAR AL STOCK"
+                                    type="object" class="btn-primary"/>
                         </group>
                     </group>
                 </page>
@@ -93,23 +277,108 @@
         </field>
     </record>
 
+    <!-- ══════════════════════════════════════════════════════════════════════
+         SALE.ORDER — Herencia
+    ══════════════════════════════════════════════════════════════════════════ -->
     <record id="view_order_form_inherit_farmacia" model="ir.ui.view">
         <field name="name">sale.order.form.inherit.farmacia</field>
         <field name="model">sale.order</field>
         <field name="inherit_id" ref="sale.view_order_form"/>
         <field name="arch" type="xml">
             <xpath expr="//field[@name='payment_term_id']" position="after">
-                <field name="prescription_validated" widget="boolean_toggle" string="Receta Validada (BioMed)"/>
+                <field name="prescription_validated" widget="boolean_toggle"/>
             </xpath>
         </field>
     </record>
 
+    <!-- ══════════════════════════════════════════════════════════════════════
+         WIZARD CONFIG API KEY
+    ══════════════════════════════════════════════════════════════════════════ -->
+    <record id="view_biomed_config_wizard_form" model="ir.ui.view">
+        <field name="name">biomed.config.wizard.form</field>
+        <field name="model">biomed.config.wizard</field>
+        <field name="arch" type="xml">
+            <form string="⚙️ Configurar BioMed — API Key Gemini">
+                <sheet>
+                    <group string="Credenciales de Google Gemini">
+                        <field name="gemini_api_key" widget="password"
+                               placeholder="Pega tu API Key de Google AI Studio aquí"/>
+                    </group>
+                    <group string="Resultado" invisible="not test_result">
+                        <field name="test_result" nolabel="1" widget="html"/>
+                    </group>
+                </sheet>
+                <footer>
+                    <button name="action_save_and_test"
+                            string="💾 Guardar y Verificar Conexión"
+                            type="object" class="oe_highlight"/>
+                    <button string="Cancelar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         ACTIONS
+    ══════════════════════════════════════════════════════════════════════════ -->
     <record id="action_farmacia_main" model="ir.actions.act_window">
-        <field name="name">BioMed Main</field>
+        <field name="name">🏥 BioMed - Panel de Control</field>
         <field name="res_model">farmacia.gestion</field>
         <field name="view_mode">list,form</field>
     </record>
 
-    <menuitem id="menu_farmacia_root" name="BioMed App" web_icon="farmacia_bio,static/description/icon.png" sequence="1"/>
-    <menuitem id="menu_farmacia_gestion" name="Panel de Control" parent="menu_farmacia_root" action="action_farmacia_main" sequence="10"/>
+    <record id="action_farmacia_historial" model="ir.actions.act_window">
+        <field name="name">📜 Historial de Análisis IA</field>
+        <field name="res_model">farmacia.analisis.historial</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <record id="action_biomed_config_wizard" model="ir.actions.act_window">
+        <field name="name">⚙️ Configurar API Key</field>
+        <field name="res_model">biomed.config.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <record id="action_biomed_dashboard" model="ir.actions.client">
+        <field name="name">📊 Dashboard BioMed</field>
+        <field name="tag">biomed_dashboard</field>
+    </record>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         MENÚS
+    ══════════════════════════════════════════════════════════════════════════ -->
+    <menuitem id="menu_farmacia_root"
+              name="🏥 BioMed App"
+              web_icon="farmacia_bio,static/description/icon.png"
+              sequence="1"/>
+    <menuitem id="menu_farmacia_dashboard"
+              name="📊 Dashboard"
+              parent="menu_farmacia_root"
+              action="action_biomed_dashboard"
+              sequence="5"/>
+    <menuitem id="menu_farmacia_gestion"
+              name="📋 Gestión Farmacéutica"
+              parent="menu_farmacia_root"
+              action="action_farmacia_main"
+              sequence="10"/>
+    <menuitem id="menu_farmacia_reports_root"
+              name="📈 Reportes"
+              parent="menu_farmacia_root"
+              sequence="20"/>
+    <menuitem id="menu_farmacia_reports_analisis"
+              name="📜 Historial Análisis RAG"
+              parent="menu_farmacia_reports_root"
+              action="action_farmacia_historial"
+              sequence="1"/>
+    <menuitem id="menu_farmacia_config"
+              name="⚙️ Configuración"
+              parent="menu_farmacia_root"
+              sequence="30"/>
+    <menuitem id="menu_farmacia_config_apikey"
+              name="🔑 API Key de Gemini"
+              parent="menu_farmacia_config"
+              action="action_biomed_config_wizard"
+              sequence="10"/>
+
 </odoo>
