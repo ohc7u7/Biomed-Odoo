@@ -11,6 +11,7 @@ CAMBIOS v2.1:
 """
 from . import models
 from . import wizards   # [FIX] agregado — faltaba completamente
+from . import controllers
 
 
 def post_init_hook(cr, registry):

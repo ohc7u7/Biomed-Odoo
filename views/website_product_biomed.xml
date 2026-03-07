@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ══ Templates parciales de BioMed ══ -->
+
+    <template id="biomed_stock_widget" name="BioMed Stock Widget">
+        <t t-if="product.is_medicine">
+            <div class="biomed-stock-wrap">
+                <t t-set="stock" t-value="product.qty_available"/>
+                <t t-if="stock &gt; 20">
+                    <span class="biomed-badge biomed-ok">
+                        &#10003; <t t-out="int(stock)"/> unidades disponibles
+                    </span>
+                </t>
+                <t t-elif="stock &gt; 0">
+                    <span class="biomed-badge biomed-low">
+                        &#9888; Solo <t t-out="int(stock)"/> unidades
+                    </span>
+                </t>
+                <t t-else="">
+                    <span class="biomed-badge biomed-empty">
+                        &#10007; Agotado
+                    </span>
+                </t>
+                <t t-if="product.requires_prescription">
+                    <span class="biomed-badge biomed-rx">
+                        &#128203; Requiere receta
+                    </span>
+                </t>
+            </div>
+        </t>
+    </template>
+
+    <template id="biomed_receta_widget" name="BioMed Receta Widget">
+        <t t-if="product.is_medicine and product.requires_prescription">
+            <div id="biomed-receta-block" class="biomed-receta-block"
+                 t-att-data-product-id="product.id">
+                <div class="biomed-rx-header">
+                    &#9877; <strong>Receta M&#233;dica Obligatoria</strong>
+                </div>
+                <div class="biomed-rx-body">
+                    <t t-if="not product.receta_aprobada_ia">
+                        <p class="biomed-rx-info">
+                            Adjunta una foto de tu receta m&#233;dica.
+                            La IA la analizar&#225; autom&#225;ticamente.
+                        </p>
+                        <div class="biomed-upload-zone" id="biomed-upload-zone">
+                            <div class="biomed-upload-icon">&#128196;</div>
+                            <div>Arrastra aqu&#237; o
+                                <label for="biomed-file-input" class="biomed-upload-link">
+                                    selecciona archivo
+                                </label>
+                            </div>
+                            <small>JPG / PNG &#8212; m&#225;x. 5MB</small>
+                            <input type="file" id="biomed-file-input"
+                                   accept="image/*" style="display:none"/>
+                        </div>
+                        <div id="biomed-preview-wrap" style="display:none" class="text-center mt-2">
+                            <img id="biomed-preview-img"
+                                 style="max-height:180px;border-radius:8px;border:1px solid #ddd;"/>
+                            <br/>
+                            <button type="button" id="biomed-remove-btn"
+                                    class="btn btn-sm btn-outline-secondary mt-1">
+                                Cambiar imagen
+                            </button>
+                        </div>
+                        <div class="mt-3">
+                            <label style="font-size:13px;font-weight:600;">
+                                Condiciones m&#233;dicas (opcional)
+                            </label>
+                            <input type="text" id="biomed-condiciones"
+                                   class="form-control form-control-sm mt-1"
+                                   placeholder="Ej: Diabetes, Hipertensi&#243;n..."/>
+                        </div>
+                        <button type="button" id="biomed-analizar-btn"
+                                class="biomed-analizar-btn mt-3" disabled="disabled">
+                            &#128269; Analizar Receta con IA
+                        </button>
+                        <div id="biomed-loading" style="display:none" class="text-center mt-3 py-2">
+                            <div class="biomed-spinner"></div>
+                            <p class="mt-2 text-muted mb-0" style="font-size:13px;">
+                                Analizando con Gemini AI...
+                            </p>
+                        </div>
+                        <div id="biomed-resultado" class="mt-3"></div>
+                    </t>
+                    <t t-if="product.receta_aprobada_ia">
+                        <div class="biomed-aprobada-banner">
+                            &#9989; <strong>Receta Aprobada</strong> &#8212;
+                            Puedes proceder con la compra.
+                        </div>
+                        <div class="text-center mt-2">
+                            <button type="button" id="biomed-reanalizar-btn"
+                                    class="btn btn-sm btn-outline-secondary">
+                                Analizar otra receta
+                            </button>
+                        </div>
+                        <div id="biomed-nueva-receta" style="display:none" class="mt-3">
+                            <div class="biomed-upload-zone" id="biomed-upload-zone">
+                                <label for="biomed-file-input" class="biomed-upload-link">
+                                    &#128196; Selecciona nueva receta
+                                </label>
+                                <input type="file" id="biomed-file-input"
+                                       accept="image/*" style="display:none"/>
+                            </div>
+                            <div id="biomed-preview-wrap" style="display:none" class="text-center mt-2">
+                                <img id="biomed-preview-img" style="max-height:180px;border-radius:8px;"/>
+                            </div>
+                            <button type="button" id="biomed-analizar-btn"
+                                    class="biomed-analizar-btn mt-3" disabled="disabled">
+                                &#128269; Analizar Nueva Receta
+                            </button>
+                            <div id="biomed-loading" style="display:none" class="text-center mt-3">
+                                <div class="biomed-spinner"></div>
+                            </div>
+                            <div id="biomed-resultado" class="mt-3"></div>
+                        </div>
+                    </t>
+                </div>
+            </div>
+        </t>
+    </template>
+
+    <!-- ══ Inyectar en página de producto ══ -->
+    <template id="product_biomed_inject" inherit_id="website_sale.product">
+        <xpath expr="//div[@id='product_details']" position="inside">
+            <t t-call="farmacia_bio.biomed_stock_widget"/>
+            <t t-call="farmacia_bio.biomed_receta_widget"/>
+        </xpath>
+    </template>
+
+</odoo>

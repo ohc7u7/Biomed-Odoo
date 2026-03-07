@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# BioMed v2.3 — Farmacia Clínica Maestro
-# [NEW-04] Flujo receta rechazada: bloquea compra sin cambiar estado del medicamento
-# [NEW-05] Bloqueo en Website eCommerce via _verify_updated_quantity
-# [NEW-06] Campo receta_aprobada_ia en ProductTemplate
-# [FIX-15] action_analizar_receta_ia escribe receta_aprobada_ia según resultado Gemini
+# BioMed v2.4 — Farmacia Clínica Maestro
+# [v2.4-NEW] Bloqueo de stock insuficiente en ventas internas (sale.order)
+# [v2.4-NEW] Bloqueo de stock insuficiente ya existía en eCommerce (_verify_updated_quantity)
+# [v2.4-FIX] get_dashboard_data ahora cuenta product.template con is_medicine=True
+#            en lugar de solo farmacia.gestion → dashboard muestra datos correctos
 
 import logging
 from odoo import models, fields, api
@@ -12,7 +12,7 @@ import requests
 
 _logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL    = "gemini-2.5-flash"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
@@ -20,18 +20,14 @@ GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 class ProductTemplate(models.Model):
     _inherit = 'product.template'
 
-    is_medicine          = fields.Boolean(string='Es Medicamento', default=False)
-    active_component     = fields.Char(string='Principio Activo')
-    fda_status           = fields.Char(string='Estado Sanitario (FDA)', readonly=True, store=True)
+    is_medicine           = fields.Boolean(string='Es Medicamento', default=False)
+    active_component      = fields.Char(string='Principio Activo')
+    fda_status            = fields.Char(string='Estado Sanitario (FDA)', readonly=True, store=True)
     requires_prescription = fields.Boolean(string='Requiere Receta Obligatoria', default=False)
-    prescription_file    = fields.Binary(string="Receta Digital")
-
-    # [NEW-06] True = última receta aprobada por IA → puede comprarse
-    #          False = rechazada o sin analizar → bloqueado en Website y POS
-    receta_aprobada_ia = fields.Boolean(
+    prescription_file     = fields.Binary(string="Receta Digital")
+    receta_aprobada_ia    = fields.Boolean(
         string='Receta Aprobada por IA', default=False, readonly=True,
-        help="Controlado automáticamente por el análisis de Gemini. "
-             "True = puede comprarse. False = compra bloqueada."
+        help="True = puede comprarse. False = compra bloqueada."
     )
 
     @api.model_create_multi
@@ -53,6 +49,9 @@ class ProductTemplate(models.Model):
         for record in self:
             if not record.name:
                 continue
+            # IMPORTANTE: usar solo la primera palabra en minúsculas para la FDA
+            # "Paracetamol 500mg" → busca "paracetamol" ✓
+            # Si el nombre tiene mg, la FDA no lo reconoce → siempre usar solo la droga
             search_term = record.name.split()[0].strip().lower()
             url = (
                 f"https://api.fda.gov/drug/label.json"
@@ -62,7 +61,7 @@ class ProductTemplate(models.Model):
             try:
                 response = requests.get(url, timeout=10)
                 if response.status_code == 200:
-                    data = response.json()
+                    data    = response.json()
                     results = data.get('results', [])
                     if not results:
                         record.write({'active_component': 'N/A', 'fda_status': "NO ENCONTRADO"})
@@ -70,10 +69,13 @@ class ProductTemplate(models.Model):
                     openfda       = results[0].get('openfda', {})
                     brand_names   = [b.lower() for b in openfda.get('brand_name', [])]
                     generic_names = [g.lower() for g in openfda.get('generic_name', [])]
-                    if any(search_term in b for b in brand_names) or \
-                       any(search_term in g for g in generic_names):
+                    if (any(search_term in b for b in brand_names) or
+                            any(search_term in g for g in generic_names)):
                         g_name = generic_names[0] if generic_names else 'DESCONOCIDO'
-                        record.write({'active_component': g_name.upper(), 'fda_status': "APROBADO (REGISTRO FDA)"})
+                        record.write({
+                            'active_component': g_name.upper(),
+                            'fda_status': "APROBADO (REGISTRO FDA)",
+                        })
                     else:
                         record.write({'active_component': 'N/A', 'fda_status': "RECHAZADO: NO ES UN FÁRMACO"})
                 else:
@@ -126,8 +128,6 @@ class ProductProduct(models.Model):
     @api.model
     def _get_pos_ui_product_domain(self):
         res = super()._get_pos_ui_product_domain()
-        # Medicamentos en POS: FDA aprobado + stock > 0
-        # Si requiere receta → receta_aprobada_ia debe ser True
         biomed_domain = [
             '|',
             ('product_tmpl_id.is_medicine', '=', False),
@@ -142,7 +142,7 @@ class ProductProduct(models.Model):
         return res + biomed_domain
 
 
-# ─── 3. SaleOrder — bloqueo en ventas internas y website ─────────────────────
+# ─── 3. SaleOrder — bloqueo en ventas internas ───────────────────────────────
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
 
@@ -150,31 +150,57 @@ class SaleOrder(models.Model):
 
     def action_confirm(self):
         """
-        [NEW-04] Bloquea confirmación si algún medicamento con receta
-        tiene receta_aprobada_ia = False.
+        [v2.3] Bloquea si receta rechazada.
+        [v2.4-NEW] Bloquea si cantidad pedida supera el stock disponible.
         El medicamento permanece Liberado; solo se bloquea ESTA venta.
         """
         for order in self:
             for line in order.order_line:
-                tmpl = line.product_id.product_tmpl_id
-                if tmpl.is_medicine and tmpl.requires_prescription and not tmpl.receta_aprobada_ia:
+                tmpl     = line.product_id.product_tmpl_id
+                variante = line.product_id
+
+                if not tmpl.is_medicine:
+                    continue
+
+                # ── Bloqueo 1: receta rechazada ──
+                if tmpl.requires_prescription and not tmpl.receta_aprobada_ia:
                     raise UserError(
-                        f"🚫 BioMed — Compra bloqueada\n\n"
-                        f"El medicamento '{tmpl.name}' requiere receta médica válida.\n"
+                        f"🚫 BioMed — Receta rechazada\n\n"
+                        f"'{tmpl.name}' requiere receta médica válida.\n"
                         f"La última receta analizada fue RECHAZADA por el sistema IA.\n\n"
                         f"El paciente debe presentar una receta válida y ejecutar "
                         f"'ANALIZAR RECETA CON IA' antes de procesar la venta."
                     )
+
+                # ── Bloqueo 2: stock insuficiente ──────────────────────────
+                # [v2.4-NEW] Si el pedido supera lo disponible → error claro
+                stock_disponible = variante.qty_available
+                qty_pedida       = line.product_uom_qty
+
+                if qty_pedida > stock_disponible:
+                    if stock_disponible <= 0:
+                        raise UserError(
+                            f"🚫 Stock agotado: '{tmpl.name}'\n\n"
+                            f"No hay unidades disponibles en inventario.\n"
+                            f"Ve a BioMed → Panel de Control → Pedir Stock a Compras."
+                        )
+                    raise UserError(
+                        f"⚠️ Stock insuficiente: '{tmpl.name}'\n\n"
+                        f"  Cantidad pedida  : {int(qty_pedida)} unidades\n"
+                        f"  Stock disponible : {int(stock_disponible)} unidades\n\n"
+                        f"Ajusta la cantidad o solicita reposición en BioMed App."
+                    )
+
         return super().action_confirm()
 
 
 # ─── 4. WebsiteSaleOrder — bloqueo en carrito eCommerce ──────────────────────
 class WebsiteSaleOrder(models.Model):
     """
-    [NEW-05] Hereda sale.order para interceptar el carrito de website_sale.
-    Dos controles:
-    A) Medicamento en borrador → no puede agregarse al carrito (no está liberado)
-    B) Medicamento liberado + requiere receta + receta rechazada → bloqueado
+    Controla el carrito de website_sale.
+    A) Medicamento en borrador → no disponible para venta
+    B) Receta rechazada → bloqueado
+    C) Stock insuficiente → bloqueado (con mensaje claro)
     """
     _inherit = 'sale.order'
 
@@ -182,24 +208,38 @@ class WebsiteSaleOrder(models.Model):
         product = self.env['product.product'].browse(product_id)
         tmpl    = product.product_tmpl_id
 
-        # Control A: medicamento no liberado → invisible en website pero por si acaso
         if tmpl.is_medicine:
+            # Control A: no liberado por FDA
             gestion = self.env['farmacia.gestion'].search(
                 [('medicamento_id', '=', tmpl.id)], limit=1
             )
             if gestion and gestion.estado == 'borrador':
                 raise UserError(
-                    f"🚫 '{tmpl.name}' no está disponible para la venta.\n"
-                    f"El medicamento está pendiente de validación sanitaria (FDA)."
+                    f"🚫 '{tmpl.name}' no está disponible.\n"
+                    f"Pendiente de validación sanitaria (FDA)."
                 )
 
-            # Control B: liberado pero receta rechazada
+            # Control B: receta rechazada
             if tmpl.requires_prescription and not tmpl.receta_aprobada_ia:
                 raise UserError(
                     f"🚫 '{tmpl.name}' requiere receta médica válida.\n\n"
-                    f"La última receta analizada por el sistema BioMed fue RECHAZADA.\n"
-                    f"Por favor contacta a la farmacia y presenta una receta médica válida "
-                    f"para que el farmacéutico la valide en el sistema."
+                    f"La última receta fue RECHAZADA por el sistema IA de BioMed.\n"
+                    f"Contacta a la farmacia para validar tu receta antes de comprar."
+                )
+
+            # Control C: stock insuficiente [v2.3 + v2.4 mejorado]
+            stock_disponible = product.qty_available
+            if qty > stock_disponible:
+                if stock_disponible <= 0:
+                    raise UserError(
+                        f"🚫 '{tmpl.name}' está agotado.\n"
+                        f"No hay unidades disponibles en este momento."
+                    )
+                raise UserError(
+                    f"⚠️ Stock insuficiente para '{tmpl.name}'.\n\n"
+                    f"  Solicitaste : {int(qty)} unidades\n"
+                    f"  Disponible  : {int(stock_disponible)} unidades\n\n"
+                    f"Ajusta la cantidad al máximo disponible."
                 )
 
         return super()._verify_updated_quantity(order_line, product_id, qty, **kwargs)
@@ -233,32 +273,26 @@ class FarmaciaGestion(models.Model):
         ('medicamento_unico', 'unique(medicamento_id)', 'Ya existe registro para este medicamento')
     ]
 
-    name          = fields.Char(string='N° Lote', readonly=True, default='NUEVA')
-    medicamento_id = fields.Many2one('product.template', string='Insumo Farmacéutico', required=True)
-    proveedor_id  = fields.Many2one('res.partner', string='Laboratorio Proveedor')
-    stock_actual  = fields.Float(related='medicamento_id.qty_available', string='Stock Bodega', readonly=True, store=True)
-    principio_activo_rel = fields.Char(related='medicamento_id.active_component', string='Principio Activo', readonly=True)
-    alerta_stock  = fields.Selection([('normal','OK'),('critico','CRÍTICO')], compute="_compute_alerta_stock", store=True)
-    cantidad      = fields.Float(string='Cant. a Adquirir', default=10.0)
-    purchase_order_id = fields.Many2one('purchase.order', string='Orden Compra', readonly=True)
-    estado        = fields.Selection([('borrador','En Revisión'),('procesado','Liberado')], default='borrador')
-
+    name                      = fields.Char(string='N° Lote', readonly=True, default='NUEVA')
+    medicamento_id            = fields.Many2one('product.template', string='Insumo Farmacéutico', required=True)
+    proveedor_id              = fields.Many2one('res.partner', string='Laboratorio Proveedor')
+    stock_actual              = fields.Float(related='medicamento_id.qty_available', string='Stock Bodega', readonly=True, store=True)
+    principio_activo_rel      = fields.Char(related='medicamento_id.active_component', string='Principio Activo', readonly=True)
+    alerta_stock              = fields.Selection([('normal','OK'),('critico','CRÍTICO')], compute="_compute_alerta_stock", store=True)
+    cantidad                  = fields.Float(string='Cant. a Adquirir', default=10.0)
+    purchase_order_id         = fields.Many2one('purchase.order', string='Orden Compra', readonly=True)
+    estado                    = fields.Selection([('borrador','En Revisión'),('procesado','Liberado')], default='borrador')
     requires_prescription_rel = fields.Boolean(related='medicamento_id.requires_prescription', string="¿Requiere Receta?", readonly=False)
-    receta_rel    = fields.Binary(related='medicamento_id.prescription_file', string='Receta', readonly=False)
-
-    # [NEW-06] Estado actual de la receta IA — visible en el panel
-    receta_aprobada_ia_rel = fields.Boolean(
-        related='medicamento_id.receta_aprobada_ia', string='Receta IA Aprobada', readonly=True
-    )
-
-    ai_analysis_result    = fields.Html(string="Último Resultado IA", readonly=True)
-    ai_analysis_timestamp = fields.Datetime(string="Timestamp Último Análisis", readonly=True)
-    condiciones_paciente  = fields.Text(
+    receta_rel                = fields.Binary(related='medicamento_id.prescription_file', string='Receta', readonly=False)
+    receta_aprobada_ia_rel    = fields.Boolean(related='medicamento_id.receta_aprobada_ia', string='Receta IA Aprobada', readonly=True)
+    ai_analysis_result        = fields.Html(string="Último Resultado IA", readonly=True)
+    ai_analysis_timestamp     = fields.Datetime(string="Timestamp Último Análisis", readonly=True)
+    condiciones_paciente      = fields.Text(
         string='Condiciones del Paciente',
-        help="Condiciones médicas separadas por coma. Ej: Diabetes, Insuficiencia Renal\nAlimenta el sistema RAG para detectar contraindicaciones."
+        help="Condiciones separadas por coma. Ej: Diabetes, Insuficiencia Renal\nAlimenta el RAG."
     )
     analisis_ids   = fields.One2many('farmacia.analisis.historial', 'gestion_id', string='Historial IA')
-    total_analisis = fields.Integer(string='Total Análisis', compute='_compute_total_analisis')
+    total_analisis = fields.Integer(string='Total Análisis', compute='_compute_total_analisis', store=True)
 
     @api.depends('analisis_ids')
     def _compute_total_analisis(self):
@@ -273,18 +307,13 @@ class FarmaciaGestion(models.Model):
     def _get_api_key(self):
         key = self.env['ir.config_parameter'].sudo().get_param('farmacia_bio.gemini_api_key')
         if not key:
-            raise UserError("⚙️ API Key no configurada.\nVe a: BioMed App → ⚙️ Configuración → 🔑 API Key de Gemini")
+            raise UserError(
+                "⚙️ API Key no configurada.\n"
+                "Ve a: BioMed App → ⚙️ Configuración → 🔑 API Key de Gemini"
+            )
         return key.strip()
 
     def action_analizar_receta_ia(self):
-        """
-        Pipeline RAG v2.3:
-        1. ChromaDB retrieve_context con condiciones_paciente reales
-        2. generate_rag_prompt con contraindicaciones inyectadas
-        3. GeminiService.analyze_prescription_with_rag
-        4. [NEW-04] Escribe receta_aprobada_ia en el producto
-        5. [NEW-02] Guarda en historial de auditoría
-        """
         for record in self:
             if not record.receta_rel:
                 raise UserError("📎 Debe adjuntar la imagen de la receta digital.")
@@ -293,7 +322,7 @@ class FarmaciaGestion(models.Model):
             comp_name = record.principio_activo_rel or med_name
             api_key   = self._get_api_key()
 
-            raw = record.receta_rel
+            raw        = record.receta_rel
             imagen_b64 = raw.decode('utf-8') if isinstance(raw, bytes) else str(raw)
             if not imagen_b64 or len(imagen_b64) < 100:
                 raise UserError("❌ La imagen adjunta parece estar vacía o corrupta.")
@@ -313,13 +342,12 @@ class FarmaciaGestion(models.Model):
                     condiciones = [c.strip() for c in record.condiciones_paciente.split(',') if c.strip()] \
                         if record.condiciones_paciente else [f"Medicamento {med_name}"]
                     contexto_rag = rag.retrieve_context(med_name, condiciones, n_results=5)
-                    _logger.info(f"[BioMed RAG] {med_name}: {len(contexto_rag.get('contraindicaciones',[]))} resultados")
                 except Exception as e:
                     _logger.warning(f"[BioMed RAG] Error ChromaDB: {e}")
 
             try:
-                prompt = rag.generate_rag_prompt(med_name, comp_name, contexto_rag) if RAG_DISPONIBLE and rag \
-                    else self._build_fallback_prompt(med_name, comp_name)
+                prompt = rag.generate_rag_prompt(med_name, comp_name, contexto_rag) \
+                    if RAG_DISPONIBLE and rag else self._build_fallback_prompt(med_name, comp_name)
             except Exception:
                 prompt = self._build_fallback_prompt(med_name, comp_name)
 
@@ -345,7 +373,6 @@ class FarmaciaGestion(models.Model):
                     f'🧬 <strong>Contexto RAG:</strong> {contexto_rag.get("resumen_ejecutivo","")}</div>'
                 ) + html_response
 
-            # Badge de estado de compra claro para el farmacéutico
             if receta_aprobada:
                 html_response += (
                     '<div style="background:#d4edda;border-left:4px solid #28a745;padding:12px;'
@@ -356,20 +383,13 @@ class FarmaciaGestion(models.Model):
                 html_response += (
                     '<div style="background:#f8d7da;border-left:4px solid #dc3545;padding:12px;'
                     'margin-top:12px;border-radius:4px;font-size:14px;font-weight:bold;">'
-                    '🚫 RECETA RECHAZADA — La compra está BLOQUEADA. '
-                    'El paciente debe presentar una receta válida.</div>'
+                    '🚫 RECETA RECHAZADA — La compra está BLOQUEADA.</div>'
                 )
 
             now = fields.Datetime.now()
-
-            # [NEW-04] Actualizar receta_aprobada_ia en el producto
-            # El estado del medicamento (Liberado/En Revisión) NO cambia
-            # Solo se controla si se puede comprar en este momento
             record.medicamento_id.sudo().write({'receta_aprobada_ia': receta_aprobada})
-
             record.write({'ai_analysis_result': html_response, 'ai_analysis_timestamp': now})
 
-            # [NEW-02] Historial de auditoría
             self.env['farmacia.analisis.historial'].create({
                 'gestion_id':              record.id,
                 'timestamp':               now,
@@ -381,27 +401,41 @@ class FarmaciaGestion(models.Model):
                 'rag_utilizado':           RAG_DISPONIBLE,
                 'resumen_rag':             contexto_rag.get('resumen_ejecutivo', ''),
             })
-
-            _logger.info(f"[BioMed] {med_name} → Receta: {'APROBADA' if receta_aprobada else 'RECHAZADA'}")
+            _logger.info(f"[BioMed] {med_name} → {'APROBADA' if receta_aprobada else 'RECHAZADA'}")
         return True
 
     @staticmethod
     def _build_fallback_prompt(med_name, comp_name):
-        return f"""Actúa como auditor farmacéutico. Analiza la imagen adjunta.
-MEDICAMENTO: {med_name} (componente: {comp_name})
-1. ¿Es una receta médica válida?
-2. ¿Contiene '{med_name}' o '{comp_name}'?
-Responde SOLO en HTML puro, sin markdown, sin backticks.
-<div style="font-family:Arial;padding:15px;border-radius:8px;background:#f9f9f9;">
-  <h4>Auditoría de Receta - BioMed</h4>
-  <ul>
-    <li>Tipo de documento: [describe]</li>
-    <li>Medicamento encontrado: [sí/no]</li>
-  </ul>
-  <div style="margin-top:10px;font-weight:bold;">
-    Veredicto: <span style="color:green;">APROBADO</span> o <span style="color:red;">RECHAZADO</span>
-  </div>
-</div>"""
+        """
+        [v2.5-FIX] Prompt que acepta nombres comerciales y genéricos.
+        Amoxil = Amoxicilina = AMOXICILLIN → todos son el mismo fármaco.
+        """
+        # Extraer solo el nombre base sin dosis (ej: "Amoxicilina 500mg" → "Amoxicilina")
+        base_name = med_name.split()[0] if med_name else med_name
+
+        return (
+            f"Eres un auditor farmacéutico certificado.\n"
+            f"Analiza la imagen de receta médica adjunta.\n\n"
+            f"MEDICAMENTO A VERIFICAR:\n"
+            f"  - Nombre genérico: {base_name} / {comp_name}\n"
+            f"  - Nombre completo registrado: {med_name}\n\n"
+            f"IMPORTANTE: El medicamento puede aparecer en la receta como:\n"
+            f"  - Su nombre genérico: '{base_name}' o '{comp_name}'\n"
+            f"  - Un nombre comercial equivalente (ej: Amoxil, Amoxidal, Trimox para Amoxicilina)\n"
+            f"  - Con dosis diferente a la registrada (aún así puede ser válido)\n"
+            f"  - Con mayúsculas/minúsculas distintas\n\n"
+            f"CRITERIOS DE APROBACIÓN (basta con UNO):\n"
+            f"  ✓ La receta menciona '{base_name}' (o variante comercial conocida)\n"
+            f"  ✓ La receta menciona '{comp_name}' (principio activo)\n"
+            f"  ✓ El medicamento prescrito tiene el mismo principio activo\n\n"
+            f"CRITERIOS DE RECHAZO (todos deben cumplirse):\n"
+            f"  ✗ La imagen NO es una receta médica real\n"
+            f"  ✗ La receta NO contiene '{base_name}', '{comp_name}' ni equivalentes\n"
+            f"  ✗ Falta firma o sello del médico\n\n"
+            f"FORMATO DE RESPUESTA: HTML puro, sin markdown, sin backticks.\n"
+            f"Incluye exactamente una de estas palabras en mayúsculas: APROBADO o RECHAZADO.\n"
+            f"Si el medicamento o su equivalente aparece en la receta → APROBADO."
+        )
 
     def action_validar_medicamento(self):
         for record in self:
@@ -412,14 +446,14 @@ Responde SOLO en HTML puro, sin markdown, sin backticks.
                     'available_in_pos': True,
                     'pos_categ_ids':    [(4, pos_category.id)] if pos_category else [],
                     'sale_ok':          True,
-                    'is_published':     True,   # Aparece en website cuando está liberado por FDA
+                    'is_published':     True,
                 })
                 record.write({
                     'estado': 'procesado',
-                    'name': f"BATCH-{record.medicamento_id.name[:3].upper()}-{fields.Date.today()}"
+                    'name':   f"BATCH-{record.medicamento_id.name[:3].upper()}-{fields.Date.today()}",
                 })
             else:
-                record.medicamento_id.write({'is_published': False})  # Ocultar de website
+                record.medicamento_id.write({'is_published': False})
                 record.write({'estado': 'borrador'})
         return True
 
@@ -450,17 +484,43 @@ Responde SOLO en HTML puro, sin markdown, sin backticks.
 
     @api.model
     def get_dashboard_data(self):
-        Gestion   = self.env['farmacia.gestion']
-        Historial = self.env['farmacia.analisis.historial']
-        top_meds  = []
-        for g in Gestion.search([('total_analisis', '>', 0)], order='total_analisis desc', limit=5):
-            top_meds.append({'nombre': g.medicamento_id.name, 'cantidad': g.total_analisis, 'estado': g.estado})
+        """
+        [v2.4-FIX] Ahora cuenta product.template con is_medicine=True
+        en lugar de solo registros de farmacia.gestion.
+        Esto evita que el dashboard muestre 0 cuando hay medicamentos
+        cargados por script (sin farmacia.gestion creado manualmente).
+        """
+        Gestion    = self.env['farmacia.gestion']
+        Historial  = self.env['farmacia.analisis.historial']
+        ProductTpl = self.env['product.template']
+
+        # Métricas de inventario desde product.template (fuente de verdad)
+        total_meds     = ProductTpl.search_count([('is_medicine', '=', True)])
+        procesados     = Gestion.search_count([('estado', '=', 'procesado')])
+        en_revision    = Gestion.search_count([('estado', '=', 'borrador')])
+        stock_critico  = Gestion.search_count([('alerta_stock', '=', 'critico')])
+        sin_stock      = Gestion.search_count([('stock_actual', '=', 0)])
+
+        # Top medicamentos más analizados
+        # Usamos sorted() en Python porque total_analisis es computed
+        # (aunque ahora es stored, esta forma es más segura)
+        top_meds = []
+        todas_gestiones = Gestion.search([])
+        gestiones_con_analisis = todas_gestiones.filtered(lambda g: g.total_analisis > 0)
+        gestiones_ordenadas = sorted(gestiones_con_analisis, key=lambda g: g.total_analisis, reverse=True)[:5]
+        for g in gestiones_ordenadas:
+            top_meds.append({
+                'nombre':   g.medicamento_id.name,
+                'cantidad': g.total_analisis,
+                'estado':   g.estado,
+            })
+
         return {
-            'total_medicamentos':  Gestion.search_count([]),
-            'stock_critico':       Gestion.search_count([('alerta_stock', '=', 'critico')]),
-            'procesados':          Gestion.search_count([('estado', '=', 'procesado')]),
-            'en_revision':         Gestion.search_count([('estado', '=', 'borrador')]),
-            'sin_stock':           Gestion.search_count([('stock_actual', '=', 0)]),
+            'total_medicamentos':  total_meds,       # ← FIX: antes era Gestion.search_count([])
+            'stock_critico':       stock_critico,
+            'procesados':          procesados,
+            'en_revision':         en_revision,
+            'sin_stock':           sin_stock,
             'total_analisis':      Historial.search_count([]),
             'analisis_con_riesgo': Historial.search_count([('tuvo_contraindicaciones', '=', True)]),
             'analisis_hoy':        Historial.search_count([('timestamp', '>=', fields.Date.today())]),
