@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'BioMed — Farmacia Clínica Maestro',
-    'version': '2.3',
+    'version': '3.0',
     'summary': 'Gestión farmacéutica clínica con FDA, IA Gemini, RAG y control Website',
     'author': 'Orlán HC',
     'license': 'LGPL-3',
@@ -32,6 +32,7 @@
     },
 
     'post_init_hook': 'post_init_hook',
+    'uninstall_hook': 'uninstall_hook',
 
     'installable': True,
     'application': True,

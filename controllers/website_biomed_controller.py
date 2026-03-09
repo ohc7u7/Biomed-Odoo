@@ -12,9 +12,8 @@ class BiomedWebsiteController(http.Controller):
     @http.route(
         '/biomed/analizar-receta',
         type='json',
-        auth='public',
+        auth='user',
         website=True,
-        csrf=False,
         methods=['POST'],
     )
     def analizar_receta_website(self, product_id=None, imagen_b64=None, condiciones='', **kwargs):
